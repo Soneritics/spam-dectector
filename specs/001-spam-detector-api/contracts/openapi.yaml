@@ -1,0 +1,115 @@
+openapi: 3.0.3
+info:
+  title: SpamDetector API
+  version: 1.0.0
+  description: >
+    Classifies a supplied email message as spam/phishing/scam/unwanted using OpenAI, treating the
+    complete email content as untrusted input. Bring Your Own Key (BYOK): the caller supplies the
+    OpenAI API key per request via the x-openai-api-key header. The key is request-scoped and is
+    never persisted, logged, returned, or included in telemetry.
+paths:
+  /spam-check/email:
+    post:
+      summary: Classify an email as spam or not spam
+      description: >
+        Accepts the complete raw email as the plain-text request body and returns an
+        ApiResult<SpamResult>. The email is never interpreted as instructions to the classifier.
+        Provide the OpenAI API key via the x-openai-api-key header (required) and optionally select
+        a model via x-openai-model (defaults to gpt-5.6-luna when missing/empty/whitespace).
+      operationId: postSpamCheckEmail
+      parameters:
+        - name: x-openai-api-key
+          in: header
+          required: true
+          description: Caller's OpenAI API key (BYOK). Request-scoped; never persisted or logged.
+          schema:
+            type: string
+        - name: x-openai-model
+          in: header
+          required: false
+          description: OpenAI model to use. Defaults to gpt-5.6-luna when missing/empty/whitespace.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        description: >
+          The complete raw email as text (plain text, HTML, MIME, headers, arbitrary formatting).
+          Treated as untrusted. Non-empty and at most 1,048,576 bytes (1 MB, configurable).
+        content:
+          text/plain:
+            schema:
+              type: string
+      responses:
+        '200':
+          description: Successful classification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResultSpamResult'
+        '400':
+          description: Validation error (missing API key or empty body).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResultSpamResult'
+        '413':
+          description: Request body exceeds the maximum allowed size.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResultSpamResult'
+        '500':
+          description: Unexpected internal error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResultSpamResult'
+        '502':
+          description: >
+            Upstream provider failure (authentication, rate limit, timeout, service error, a model
+            rejected by the provider, or invalid/malformed structured output).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResultSpamResult'
+components:
+  schemas:
+    SpamResult:
+      type: object
+      additionalProperties: false
+      required: [spam, confidence, promptInjectionDetected, reason]
+      properties:
+        spam:
+          type: boolean
+          description: Email is spam, phishing, scam, or unwanted commercial content.
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Confidence score (0 = none, 1 = maximum).
+        promptInjectionDetected:
+          type: boolean
+          description: Email appears to contain an attempt to manipulate or instruct the classifier.
+        reason:
+          type: string
+          description: Short explanation of the classification.
+    ApiResultSpamResult:
+      type: object
+      properties:
+        result:
+          allOf:
+            - $ref: '#/components/schemas/SpamResult'
+          nullable: true
+          description: Classification result when successful; null on error.
+        httpCode:
+          type: integer
+          default: 200
+          description: HTTP status associated with the operation (equals the HTTP response status).
+        isError:
+          type: boolean
+          default: false
+          description: Whether the operation failed.
+        errorMessage:
+          type: string
+          nullable: true
+          description: Non-sensitive error category when failed; null on success.
