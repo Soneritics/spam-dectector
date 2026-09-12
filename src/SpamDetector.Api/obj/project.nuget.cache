@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "dgSpecHash": "Be2mibDOUN0=",
+  "success": true,
+  "projectFilePath": "D:\\Private\\SpamDetector-copilot\\src\\SpamDetector.Api\\SpamDetector.Api.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\JordiJolink_i5ryydj\\.nuget\\packages\\microsoft.aspnetcore.openapi\\10.0.12\\microsoft.aspnetcore.openapi.10.0.12.nupkg.sha512",
+    "C:\\Users\\JordiJolink_i5ryydj\\.nuget\\packages\\microsoft.openapi\\2.12.0\\microsoft.openapi.2.12.0.nupkg.sha512",
+    "C:\\Users\\JordiJolink_i5ryydj\\.nuget\\packages\\openai\\2.13.0\\openai.2.13.0.nupkg.sha512",
+    "C:\\Users\\JordiJolink_i5ryydj\\.nuget\\packages\\system.clientmodel\\1.14.0\\system.clientmodel.1.14.0.nupkg.sha512",
+    "C:\\Users\\JordiJolink_i5ryydj\\.nuget\\packages\\system.memory.data\\10.0.3\\system.memory.data.10.0.3.nupkg.sha512"
+  ],
+  "logs": []
+}

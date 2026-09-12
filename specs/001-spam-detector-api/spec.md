@@ -200,7 +200,13 @@ detail leakage and without calling the provider when the request is invalid up f
   follow or resolve links, download external resources, or invoke tools based on email content.
 - **FR-020**: The system MUST propagate cancellation and apply a finite 30-second timeout to the
   external provider request (returning HTTP 502 on timeout), and MUST avoid unnecessary external
-  calls and preprocessing.
+  calls and preprocessing. The finite provider timeout MUST take effect before any hosting-platform
+  request timeout so that a timed-out request surfaces as the controlled upstream error (HTTP 502)
+  rather than a platform-level abort.
+- **FR-021**: The system MUST publish machine-readable API documentation (an OpenAPI specification)
+  describing the endpoint, HTTP method, required and optional headers, the plain-text request body,
+  the response model, the possible HTTP status codes, and the BYOK behavior. The generated
+  documentation MUST NOT contain real or example API keys.
 
 ### Key Entities *(include if feature involves data)*
 

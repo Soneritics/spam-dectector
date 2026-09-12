@@ -96,7 +96,7 @@ public interface ISpamClassifier
 
 ```text
 HTTP request (raw body + headers)
-   → SpamCheckEndpoint  (validate: key present, body non-empty, size ≤ limit; resolve model)
+   → SpamCheckFunction  (HTTP trigger; validate: key present, body non-empty, size ≤ limit; resolve model)
    → SpamCheckRequest
    → SpamCheckService.HandleAsync  → ISpamClassifier.ClassifyAsync
                                         → OpenAISpamClassifier (per-request ResponsesClient,

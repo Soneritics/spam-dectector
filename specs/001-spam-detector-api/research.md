@@ -4,37 +4,50 @@ All Technical Context items were fully specified by the feature spec and the use
 there were no open `NEEDS CLARIFICATION` markers. This document records the key technology
 decisions, rationale, and rejected alternatives that shape Phase 1 design and implementation.
 
-## 1. Web framework: ASP.NET Core Minimal APIs (.NET 10)
+## 1. Hosting model: Azure Functions (.NET 10 isolated worker)
 
-- **Decision**: Use ASP.NET Core Minimal APIs on .NET 10 / C# 13, single endpoint mapped in
-  `Endpoints/SpamCheckEndpoint.cs`, wired in `Program.cs`.
-- **Rationale**: Lowest-ceremony option for a single-endpoint service; aligns with Simple
-  Architecture and Maintainability principles; first-class DI, OpenAPI, and `CancellationToken`
-  support.
-- **Alternatives considered**: MVC controllers (more ceremony, unnecessary for one endpoint);
-  gRPC/GraphQL (mismatched with a raw-text email contract).
+- **Decision**: Build the service as an **Azure Functions** app on the .NET 10 isolated worker with
+  a single HTTP-triggered function (`Functions/SpamCheckFunction.cs`), routed to
+  `POST /spam-check/email`. Use the **ASP.NET Core integration** for HTTP
+  (`Microsoft.Azure.Functions.Worker.Extensions.Http.AspNetCore`) so the handler receives an
+  ASP.NET Core `HttpRequest`/`HttpResponse` and first-class DI, `ILogger<T>`, and
+  `CancellationToken` support. Configure the host in `Program.cs` via
+  `FunctionsApplication.CreateBuilder(args)` + `ConfigureFunctionsWebApplication()`.
+- **Rationale**: The user explicitly requires an Azure Function. The isolated worker targets .NET 10
+  and the ASP.NET Core integration gives the raw-body access, DI, cancellation, and OpenAPI support
+  the rest of the design depends on, while keeping a single serverless endpoint (Simple
+  Architecture, Maintainability).
+- **Alternatives considered**: In-process Functions model (does not support .NET 10; being retired —
+  rejected); the built-in `HttpRequestData` model without ASP.NET Core integration (weaker raw-body
+  and OpenAPI ergonomics — rejected in favor of ASP.NET Core integration); a plain ASP.NET Core
+  Minimal API (does not satisfy the explicit "Azure Function" requirement — rejected).
+- **Auth level**: The function uses `AuthorizationLevel.Anonymous`; caller authentication to the
+  service itself is out of scope (spec Assumptions), and BYOK is carried in the request header.
 
 ## 2. Reading the raw email body (not JSON)
 
-- **Decision**: Read the request body as raw text. Bind the endpoint to `HttpRequest` (or a
-  `Stream`/`PipeReader`) and read with `StreamReader`/`ReadToEndAsync(cancellationToken)`. Do not
-  model-bind JSON. Accept `text/plain` (and be permissive on content type since email is raw).
+- **Decision**: Read the request body as raw text from the ASP.NET Core `HttpRequest.Body` stream
+  using `StreamReader`/`ReadToEndAsync(cancellationToken)`. Do not model-bind JSON. Accept
+  `text/plain` and be permissive on content type since the email is raw.
 - **Rationale**: The email may be plain text, HTML, MIME, or headers; JSON binding would corrupt or
   reject valid input. Reading the raw stream preserves content exactly (FR-002).
-- **Alternatives considered**: `[FromBody] string` with JSON input formatter (would require JSON
-  encoding by callers — rejected); custom input formatter (unnecessary complexity).
+- **Alternatives considered**: JSON-bound `string` input (would require JSON encoding by callers —
+  rejected); custom input formatter (unnecessary complexity).
 - **Note**: No parsing/normalization of the email beyond what is needed to safely transmit it to
   OpenAI as a UTF-8 string.
 
 ## 3. Max request body size (default 1 MB)
 
-- **Decision**: Enforce a configurable maximum request body size, default 1,048,576 bytes (1 MB),
-  via `IHttpMaxRequestBodySizeFeature` / endpoint metadata (e.g. `.WithMetadata(new
-  RequestSizeLimitAttribute(...))` equivalent for Minimal APIs, or Kestrel
-  `MaxRequestBodySize`), plus an explicit length check. Oversized → controlled error mapped to
-  HTTP 413.
+- **Decision**: Enforce a configurable maximum request body size, default 1,048,576 bytes (1 MB).
+  Reject oversized bodies with a controlled error mapped to HTTP 413. Enforce with an explicit check
+  (prefer the `Content-Length` header when present; otherwise bound the read so more than the limit
+  is never buffered) inside the function handler, complemented by the Functions host
+  `maxRequestBodySize` / Kestrel limit where the runtime honors it. **Enforcement point**: the
+  in-handler check is authoritative and MUST run before any full-body read; the host-level limit is
+  a defense-in-depth backstop configured to the same value so neither buffers more than the limit.
+  Fail before any OpenAI call.
 - **Rationale**: Bounds memory and token consumption from hostile/oversized input (Security,
-  Performance). Value is configurable in `appsettings.json`.
+  Performance). The value is configurable via app settings.
 - **Alternatives considered**: Unbounded body (rejected — unbounded memory/token risk); hard-coded
   limit (rejected — must be configurable/documented per spec).
 
@@ -96,9 +109,13 @@ decisions, rationale, and rejected alternatives that shape Phase 1 design and im
 
 - **Decision**: Apply a finite 30-second timeout to the OpenAI call (linked
   `CancellationTokenSource` combining the request token and a timeout), and propagate the request
-  `CancellationToken` throughout. No automatic retries initially.
+  `CancellationToken` throughout. No automatic retries initially. Set the Azure Functions host
+  `functionTimeout` (in `host.json`) strictly greater than the 30-second OpenAI timeout so the
+  application returns the controlled upstream 502 before the host aborts the invocation.
 - **Rationale**: Bounded latency and resource use (Performance); avoids retrying auth/invalid-model/
-  malformed-input failures. Future bounded exponential backoff would apply only to transient 429/5xx.
+  malformed-input failures. Reconciling the app timeout with the host timeout guarantees SC-009
+  (timed-out provider requests surface as a controlled 502, not a platform abort). Future bounded
+  exponential backoff would apply only to transient 429/5xx.
 - **Alternatives considered**: Unbounded wait (rejected); immediate retries (rejected — can amplify
   auth/quota failures and latency).
 
@@ -114,21 +131,33 @@ decisions, rationale, and rejected alternatives that shape Phase 1 design and im
 
 ## 10. Testing strategy
 
-- **Decision**: xUnit. Unit tests exercise `SpamCheckService` and the endpoint with a fake/mock
-  `ISpamClassifier`. Integration tests exercise the HTTP contract with `WebApplicationFactory`,
-  overriding `ISpamClassifier` with a fake in the DI container. Live OpenAI tests (if any) are
+- **Decision**: xUnit. Unit tests exercise `SpamCheckService` and the function handler with a
+  fake/mock `ISpamClassifier`. Integration tests exercise the HTTP contract by invoking the
+  function's HTTP handler directly with a constructed ASP.NET Core `HttpRequest`
+  (`DefaultHttpContext` with headers and a body stream) and a fake `ISpamClassifier`, asserting the
+  returned `IActionResult`/status and `ApiResult<SpamResult>` body. Live OpenAI tests (if any) are
   trait-gated (e.g. `[Trait("Category","LiveOpenAI")]`) and excluded from the default `dotnet test`
   run; they require an env-var key and are skipped otherwise.
 - **Rationale**: Testability principle — no live key needed by default; deterministic, fast tests.
+  Invoking the isolated-worker function handler directly avoids spinning up the Functions host while
+  still covering the real header/body validation and mapping logic.
+- **Alternatives considered**: `WebApplicationFactory` (not applicable to the isolated-worker
+  Functions host — rejected); end-to-end tests against a running `func start` host (slower, not
+  needed by default — reserved for optional live checks).
 - **Coverage targets** (from spec/user input): default & explicit model selection, missing key,
   empty body, oversized body, valid spam / non-spam results, prompt-injection detection, error
   mapping, and "API key never appears in error output".
 
 ## 11. OpenAPI documentation
 
-- **Decision**: Use ASP.NET Core built-in OpenAPI (`Microsoft.AspNetCore.OpenApi`,
-  `AddOpenApi`/`MapOpenApi`) to generate the spec. Document method, path, required `x-openai-api-key`
-  and optional `x-openai-model` headers, plain-text request body, `ApiResult<SpamResult>` response,
-  possible status codes (200/400/413/500/502), and BYOK behavior via endpoint metadata
-  (`.WithSummary`/`.WithDescription`/`.Produces`). Never include real example keys.
-- **Alternatives considered**: Swashbuckle (extra dependency; built-in OpenAPI suffices for .NET 10).
+- **Decision**: Use ASP.NET Core OpenAPI (`Microsoft.AspNetCore.OpenApi`) through the Azure
+  Functions ASP.NET Core integration pipeline to generate the specification. Document method, path,
+  required `x-openai-api-key` and optional `x-openai-model` headers, plain-text request body,
+  `ApiResult<SpamResult>` response, possible status codes (200/400/413/500/502), and BYOK behavior.
+  The committed source of truth is `contracts/openapi.yaml`; never include real example keys.
+- **Rationale**: The user explicitly requests ASP.NET Core OpenAPI support, which the ASP.NET Core
+  integration for Functions makes available on the worker's request pipeline.
+- **Alternatives considered**: The Azure Functions OpenAPI extension
+  (`Microsoft.Azure.Functions.Worker.Extensions.OpenApi`) — a valid Functions-native option, but the
+  user specified ASP.NET Core OpenAPI support, so it is kept only as a fallback; Swashbuckle (extra
+  dependency — unnecessary).
