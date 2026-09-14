@@ -4,10 +4,13 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Net;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Functions.Worker;
+using Microsoft.Azure.WebJobs.Extensions.OpenApi.Core.Attributes;
 using Microsoft.Extensions.Logging;
+using Microsoft.OpenApi.Models;
 using Microsoft.Extensions.Options;
 using SpamDetector.Application;
 using SpamDetector.Models;
@@ -30,6 +33,45 @@ public sealed class SpamCheckFunction(
     private readonly SpamDetectorOptions _options = options.Value;
 
     [Function("SpamCheck")]
+    [OpenApiOperation(
+        operationId: "SpamCheck",
+        tags: ["spam-check"],
+        Summary = "Classifies a raw email body as spam.",
+        Description = "Reads the raw email body (never parsed as JSON), validates the BYOK header and body, resolves the model, and returns the classification result.")]
+    [OpenApiParameter(
+        name: ApiKeyHeader,
+        In = ParameterLocation.Header,
+        Required = true,
+        Type = typeof(string),
+        Summary = "Bring-your-own-key OpenAI API key.",
+        Description = "The OpenAI API key used to perform the classification. The key is never persisted or logged.")]
+    [OpenApiParameter(
+        name: ModelHeader,
+        In = ParameterLocation.Header,
+        Required = false,
+        Type = typeof(string),
+        Summary = "Optional OpenAI model override.",
+        Description = "When omitted, the configured default model is used.")]
+    [OpenApiRequestBody(
+        contentType: "text/plain",
+        bodyType: typeof(string),
+        Required = true,
+        Description = "The raw email body to classify.")]
+    [OpenApiResponseWithBody(
+        statusCode: HttpStatusCode.OK,
+        contentType: "application/json",
+        bodyType: typeof(ApiResult<SpamResult>),
+        Description = "The classification result.")]
+    [OpenApiResponseWithBody(
+        statusCode: HttpStatusCode.BadRequest,
+        contentType: "application/json",
+        bodyType: typeof(ApiResult<SpamResult>),
+        Description = "The required API key header is missing or the request body is empty.")]
+    [OpenApiResponseWithBody(
+        statusCode: HttpStatusCode.RequestEntityTooLarge,
+        contentType: "application/json",
+        bodyType: typeof(ApiResult<SpamResult>),
+        Description = "The request body exceeds the maximum allowed size.")]
     public async Task<IActionResult> Run(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = "spam-check/email")] HttpRequest request,
         CancellationToken cancellationToken)
