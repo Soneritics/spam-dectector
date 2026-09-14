@@ -72,6 +72,16 @@ public sealed class SpamCheckFunction(
         contentType: "application/json",
         bodyType: typeof(ApiResult<SpamResult>),
         Description = "The request body exceeds the maximum allowed size.")]
+    [OpenApiResponseWithBody(
+        statusCode: HttpStatusCode.BadGateway,
+        contentType: "application/json",
+        bodyType: typeof(ApiResult<SpamResult>),
+        Description = "Upstream classification provider failure.")]
+    [OpenApiResponseWithBody(
+        statusCode: HttpStatusCode.InternalServerError,
+        contentType: "application/json",
+        bodyType: typeof(ApiResult<SpamResult>),
+        Description = "Unexpected internal server error.")]
     public async Task<IActionResult> Run(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = "spam-check/email")] HttpRequest request,
         CancellationToken cancellationToken)
