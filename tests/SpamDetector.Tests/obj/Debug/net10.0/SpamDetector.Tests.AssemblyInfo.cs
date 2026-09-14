@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("SpamDetector.Tests")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+7387b43778f5cae0821c82491f3cf27bb4b6fc96")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+4507082ae75c24542cbdffd1e88c016dec1ef095")]
 [assembly: System.Reflection.AssemblyProductAttribute("SpamDetector.Tests")]
 [assembly: System.Reflection.AssemblyTitleAttribute("SpamDetector.Tests")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
