@@ -33,7 +33,9 @@ public sealed class SpamResultSchemaTests
         Assert.Equal(0, confidence.GetProperty("minimum").GetInt32());
         Assert.Equal(1, confidence.GetProperty("maximum").GetInt32());
 
-        var required = root.GetProperty("required").EnumerateArray().Select(e => e.GetString()).ToArray();
-        Assert.Equal(new[] { "spam", "confidence", "promptInjectionDetected", "reason" }, required);
+        var required = root.GetProperty("required").EnumerateArray()
+            .Select(e => e.GetString() ?? string.Empty)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.True(required.SetEquals(new[] { "spam", "confidence", "promptInjectionDetected", "reason" }));
     }
 }
