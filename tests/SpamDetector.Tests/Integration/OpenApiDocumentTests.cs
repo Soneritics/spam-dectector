@@ -44,7 +44,7 @@ public sealed class OpenApiDocumentTests
                 Title = "Spam Detector",
                 Description = "Spam Detector OpenAPI documentation"
             })
-            .AddServer(CreateRequest(), routePrefix: "api")
+            .AddServer(CreateRequest(), routePrefix: string.Empty)
             .AddVisitors(VisitorCollection.CreateInstance())
             .Build(typeof(SpamCheckFunction).Assembly, version)
             .RenderAsync(specVersion, OpenApiFormat.Json);
