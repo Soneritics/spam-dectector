@@ -1,70 +1,104 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Hosting.Internal;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Azure.Functions.Worker.Extensions.OpenApi;
+using Microsoft.Azure.WebJobs.Extensions.OpenApi.Core;
+using Microsoft.Azure.WebJobs.Extensions.OpenApi.Core.Abstractions;
+using Microsoft.Azure.WebJobs.Extensions.OpenApi.Core.Configurations;
+using Microsoft.Azure.WebJobs.Extensions.OpenApi.Core.Enums;
+using Microsoft.Azure.WebJobs.Extensions.OpenApi.Core.Visitors;
+using Microsoft.OpenApi;
+using Microsoft.OpenApi.Models;
+using NSubstitute;
 using SpamDetector.Functions;
 using Xunit;
 
 namespace SpamDetector.Tests.Integration;
 
 /// <summary>
-/// Verifies that the OpenAPI document registered by <c>AddOpenApi()</c> is actually served at
-/// runtime through <see cref="OpenApiFunction"/> (the Functions-native replacement for
-/// <c>MapOpenApi()</c>), that unknown document names return 404, and that it never leaks credentials.
+/// Verifies that the OpenAPI document produced from the <see cref="SpamCheckFunction"/> attributes by
+/// the <c>Microsoft.Azure.Functions.Worker.Extensions.OpenApi</c> extension (the Functions-native
+/// replacement for the previous ASP.NET Core <c>AddOpenApi()</c>/<c>MapOpenApi()</c> pipeline) is
+/// valid, describes the spam-check endpoint, and never leaks credentials.
 /// </summary>
 public sealed class OpenApiDocumentTests
 {
-    private static ServiceProvider BuildServices()
+    private static IHttpRequestDataObject CreateRequest()
     {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddRouting();
-        services.AddSingleton<IHostEnvironment>(new HostingEnvironment
-        {
-            ApplicationName = "SpamDetector",
-            EnvironmentName = "Development"
-        });
-        services.AddOpenApi();
-        return services.BuildServiceProvider();
+        var req = Substitute.For<IHttpRequestDataObject>();
+        req.Scheme.Returns("https");
+        req.Host.Returns(new HostString("localhost"));
+        req.Query.Returns(new QueryCollection());
+        return req;
     }
 
-    private static HttpRequest CreateRequest(IServiceProvider services)
+    private static async Task<string> RenderDocumentAsync(OpenApiVersionType version, OpenApiSpecVersion specVersion)
     {
-        var context = new DefaultHttpContext { RequestServices = services };
-        return context.Request;
+        var helper = new DocumentHelper(new RouteConstraintFilter(), new OpenApiSchemaAcceptor());
+        var document = new Document(helper);
+
+        return await document
+            .InitialiseDocument()
+            .AddMetadata(new OpenApiInfo
+            {
+                Version = "1.0.0",
+                Title = "Spam Detector",
+                Description = "Spam Detector OpenAPI documentation"
+            })
+            .AddServer(CreateRequest(), routePrefix: "api")
+            .AddVisitors(VisitorCollection.CreateInstance())
+            .Build(typeof(SpamCheckFunction).Assembly, version)
+            .RenderAsync(specVersion, OpenApiFormat.Json);
     }
 
     [Fact]
-    public async Task OpenApi_document_is_served_as_valid_json()
+    public async Task OpenApi_document_is_generated_as_valid_json()
     {
-        using ServiceProvider provider = BuildServices();
-        var function = new OpenApiFunction(NullLogger<OpenApiFunction>.Instance);
+        string content = await RenderDocumentAsync(OpenApiVersionType.V3, OpenApiSpecVersion.OpenApi3_0);
 
-        IActionResult result = await function.Run(CreateRequest(provider), "v1", CancellationToken.None);
+        Assert.False(string.IsNullOrWhiteSpace(content));
 
-        var content = Assert.IsType<ContentResult>(result);
-        Assert.Equal(200, content.StatusCode);
-        Assert.Equal("application/json", content.ContentType);
-        Assert.False(string.IsNullOrWhiteSpace(content.Content));
-
-        using JsonDocument document = JsonDocument.Parse(content.Content!);
+        using JsonDocument document = JsonDocument.Parse(content);
         Assert.True(document.RootElement.TryGetProperty("openapi", out _));
-        System.Console.WriteLine("PATHS_DUMP:" + content.Content);
-
-        Assert.DoesNotContain("sk-", content.Content!);
     }
 
     [Fact]
-    public async Task Unknown_document_name_returns_404()
+    public async Task OpenApi_document_describes_the_spam_check_endpoint()
     {
-        using ServiceProvider provider = BuildServices();
-        var function = new OpenApiFunction(NullLogger<OpenApiFunction>.Instance);
+        string content = await RenderDocumentAsync(OpenApiVersionType.V3, OpenApiSpecVersion.OpenApi3_0);
 
-        IActionResult result = await function.Run(CreateRequest(provider), "does-not-exist", CancellationToken.None);
+        using JsonDocument document = JsonDocument.Parse(content);
+        JsonElement paths = document.RootElement.GetProperty("paths");
 
-        Assert.IsType<NotFoundResult>(result);
+        Assert.True(paths.TryGetProperty("/spam-check/email", out JsonElement endpoint));
+        Assert.True(endpoint.TryGetProperty("post", out JsonElement post));
+        Assert.Equal("SpamCheck", post.GetProperty("operationId").GetString());
+
+        // The BYOK header parameter is documented and required.
+        JsonElement parameters = post.GetProperty("parameters");
+        var apiKeyParameter = parameters.EnumerateArray()
+            .Single(p => p.GetProperty("name").GetString() == "x-openai-api-key");
+        Assert.Equal("header", apiKeyParameter.GetProperty("in").GetString());
+        Assert.True(apiKeyParameter.GetProperty("required").GetBoolean());
+
+        // The raw email body is documented as text/plain.
+        Assert.True(post.GetProperty("requestBody").GetProperty("content").TryGetProperty("text/plain", out _));
+    }
+
+    [Fact]
+    public async Task OpenApi_document_never_leaks_credentials()
+    {
+        string content = await RenderDocumentAsync(OpenApiVersionType.V3, OpenApiSpecVersion.OpenApi3_0);
+
+        Assert.DoesNotContain("sk-", content);
+    }
+
+    [Fact]
+    public async Task OpenApi_document_can_be_rendered_as_v2()
+    {
+        string content = await RenderDocumentAsync(OpenApiVersionType.V2, OpenApiSpecVersion.OpenApi2_0);
+
+        using JsonDocument document = JsonDocument.Parse(content);
+        Assert.Equal("2.0", document.RootElement.GetProperty("swagger").GetString());
+        Assert.True(document.RootElement.GetProperty("paths").TryGetProperty("/spam-check/email", out _));
     }
 }
