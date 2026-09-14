@@ -108,7 +108,7 @@ public sealed class SpamCheckFunction(
             ArrayPool<byte>.Shared.Return(rented);
         }
 
-        return (Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length), false);
+        return (Encoding.UTF8.GetString(buffer.GetBuffer(), 0, checked((int)buffer.Length)), false);
     }
 
     private static ObjectResult ErrorResult(int httpCode, string message)
