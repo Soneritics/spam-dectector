@@ -14,27 +14,19 @@ namespace SpamDetector.Infrastructure.OpenAI;
 /// email as separate user input, forces strict Structured Outputs, and deserializes the result.
 /// No tools are ever enabled. Applies a finite timeout and propagates cancellation.
 /// </summary>
-public sealed class OpenAISpamClassifier : ISpamClassifier
+public sealed class OpenAISpamClassifier(
+    IResponsesClientFactory clientFactory,
+    IOptions<SpamDetectorOptions> options,
+    ILogger<OpenAISpamClassifier> logger)
+    : ISpamClassifier
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly IResponsesClientFactory _clientFactory;
-    private readonly SpamDetectorOptions _options;
-    private readonly ILogger<OpenAISpamClassifier> _logger;
-
-    public OpenAISpamClassifier(
-        IResponsesClientFactory clientFactory,
-        IOptions<SpamDetectorOptions> options,
-        ILogger<OpenAISpamClassifier> logger)
-    {
-        _clientFactory = clientFactory;
-        _options = options.Value;
-        _logger = logger;
-    }
+    private readonly SpamDetectorOptions _options = options.Value;
 
     public async Task<SpamResult> ClassifyAsync(SpamCheckRequest request, CancellationToken cancellationToken)
     {
-        ResponsesClient client = _clientFactory.Create(request.ApiKey);
+        ResponsesClient client = clientFactory.Create(request.ApiKey);
 
         // Email content is ONLY ever supplied here, as untrusted user input.
         var inputItems = new List<ResponseItem>
@@ -68,13 +60,13 @@ public sealed class OpenAISpamClassifier : ISpamClassifier
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning("OpenAI classification timed out after {TimeoutSeconds}s", _options.OpenAiTimeoutSeconds);
+            logger.LogWarning("OpenAI classification timed out after {TimeoutSeconds}s", _options.OpenAiTimeoutSeconds);
             throw new SpamClassificationException(SpamClassificationFailure.Timeout);
         }
         catch (System.ClientModel.ClientResultException ex)
         {
             SpamClassificationFailure failure = MapStatus(ex.Status);
-            _logger.LogWarning("OpenAI classification failed with provider status {Status} ({Category})", ex.Status, failure);
+            logger.LogWarning("OpenAI classification failed with provider status {Status} ({Category})", ex.Status, failure);
             throw new SpamClassificationException(failure);
         }
         finally
@@ -82,12 +74,12 @@ public sealed class OpenAISpamClassifier : ISpamClassifier
             stopwatch.Stop();
         }
 
-        _logger.LogInformation("Classification completed in {ElapsedMs}ms", stopwatch.ElapsedMilliseconds);
+        logger.LogInformation("Classification completed in {ElapsedMs}ms", stopwatch.ElapsedMilliseconds);
 
         string outputText = response.GetOutputText();
         if (string.IsNullOrWhiteSpace(outputText))
         {
-            _logger.LogWarning("OpenAI classification returned empty structured output");
+            logger.LogWarning("OpenAI classification returned empty structured output");
             throw new SpamClassificationException(SpamClassificationFailure.InvalidResponse);
         }
 
@@ -103,7 +95,7 @@ public sealed class OpenAISpamClassifier : ISpamClassifier
         }
         catch (JsonException)
         {
-            _logger.LogWarning("OpenAI classification returned undeserializable structured output");
+            logger.LogWarning("OpenAI classification returned undeserializable structured output");
             throw new SpamClassificationException(SpamClassificationFailure.InvalidResponse);
         }
     }
